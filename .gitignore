@@ -1,0 +1,4 @@
+# Project exclude paths
+/train_set/
+.idea
+stanford-question-answering-dataset
