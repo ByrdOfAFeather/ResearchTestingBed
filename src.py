@@ -1,13 +1,13 @@
 import json
-import os
-
 import torch
 
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
+
 from models.BasicEncoderDecoder import GRUDecoder, BidirectionalGRUEncoder
-from models.CustomSeq2Seq import GatedQuestionAnswering
+import os
+
+torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 BERT_MODEL = torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased')
 BERT_TOKENIZER = torch.hub.load('huggingface/pytorch-transformers', 'tokenizer', 'bert-base-cased')
@@ -18,6 +18,8 @@ BATCH_SIZE = 1
 def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epochs):
     encoder.train()
     decoder.train()
+    # encoder.cuda()
+    # decoder.cuda()
     cum_loss = 0
     index = 0
     for i in range(0, epochs):
@@ -26,29 +28,30 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
             deocder_optim.zero_grad()
             loss = None
             for j in range(0, BATCH_SIZE):
-                try:
-                    batch = data[index]
-                except Exception:
-                    index = 0
-                    batch = data[index]
-                index += 1
-                # batch = next(iter(data))
+                # try:
+                #     batch = data[index]
+                # except Exception:
+                #     index = 0
+                #     batch = data[index]
+                # index += 1
+                batch = next(iter(data))
                 target_labels = torch.tensor(batch['target'])
 
-                context_vec = BERT_MODEL(torch.tensor([batch['context'][0][0:250]]))[0]
-                answer_tags = torch.tensor(batch['answer_tags'])
+                context_vec = BERT_MODEL(torch.tensor(batch['context']))[0]
+                answer_tags = torch.tensor([batch['answer_tags']])
                 output_vec = BERT_MODEL(target_labels)[0]
 
-                x = encoder(context_vec, answer_tags)
-                x = decoder(output_vec, x)
+                x, attn = encoder(context_vec, answer_tags)
+                x = decoder(output_vec, x, attn)
 
-                if i % 100 == 0:
+                if i % 1000 == 0:
                     print("=====")
                     print(f"TARGET: {target_labels}")
-
                     print(f"ORIGINAL: {BERT_TOKENIZER.decode(target_labels[0])}")
                     print(f"PRED: {BERT_TOKENIZER.decode(torch.argmax(torch.softmax(x[0], 1), dim=1))}")
                     print("=====")
+                    torch.save(encoder.state_dict(), 'error_saves/encoder')
+                    torch.save(decoder.state_dict(), 'error_saves/decoder')
 
                 target_labels.contiguous().view(-1)
                 if loss is None:
@@ -57,31 +60,40 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
                     loss += criterion(x[0], target_labels[0])
 
             loss.backward()
-            for n, w in encoder.named_parameters():
-                if w.grad is None:
-                    print("Detected None Gradient")
-                    print(n)
-                    continue
-                else:
-                    pass
-                if torch.sum(w.grad) == 0:
-                    print("0 gradient detected")
-                    print(n)
+            # for n, w in encoder.named_parameters():
+            #     if w.grad is None:
+            #         print("Detected None Gradient")
+            #         print(n)
+            #         continue
+            #     else:
+            #         pass
+            #     if torch.sum(w.grad) == 0:
+            #         print("0 gradient detected")
+            #         print(n)
+            #
+            # for n, w in decoder.named_parameters():
+            #     if w.grad is None:
+            #         print("Detected None Gradient")
+            #         print(n)
+            #         continue
+            #     else:
+            #         pass
+            #     if torch.sum(w.grad) == 0:
+            #         print("0 gradient detected")
+            #         print(n)
 
             encoder_optim.step()
             deocder_optim.step()
 
             cum_loss += loss.item()
 
-            if i % 100 == 0:
-                print(i, cum_loss / 99)
+            if i % 1000 == 0:
+                print(i, cum_loss / 999)
                 cum_loss = 0
         except Exception as e:
-            print(i)
-            print(index)
-            print("ERROR")
-            print(e)
-            print([batch['context'][0][0:250]])
+            print(f"found error {e} saving model")
+            torch.save(encoder.state_dict(), 'error_saves/encoder')
+            torch.save(decoder.state_dict(), 'error_saves/decoder')
             break
 
 
@@ -140,14 +152,25 @@ class SQuADSet(Dataset):
         return sample
 
 
-if __name__ == "__main__":
-    encoder = BidirectionalGRUEncoder(input_size=768, hidden_size=600)
-
+def build_model_and_train():
+    # TODO: Make it clear that this 3 comes from embedding layer
+    encoder = BidirectionalGRUEncoder(input_size=768 + 3, hidden_size=600)
+    encoder.init_weights()
     decoder = GRUDecoder(input_size=768, hidden_size=1200)
-    encoder_optim = torch.optim.Adam(encoder.parameters())
-    decoder_optim = torch.optim.Adam(decoder.parameters())
+    decoder.init_weights()
+
+    if os.path.exists("error_saves/encoder"):
+        encoder.load_state_dict(torch.load("error_saves/encoder"))
+    if os.path.exists("error_saves/decoder"):
+        decoder.load_state_dict(torch.load("error_saves/decoder"))
+    encoder_optim = torch.optim.Adam(encoder.parameters(), lr=.001)
+    decoder_optim = torch.optim.Adam(decoder.parameters(), lr=.001)
     criterion = nn.CrossEntropyLoss()
 
     # data = DataLoader(SQuADSet("train_set"), shuffle=True)
-    data = SQuADSet("train_set")
+    data = DataLoader(SQuADSet("train_set"), shuffle=True)
     train(encoder, decoder, encoder_optim, decoder_optim, criterion, data, 250000)
+
+
+if __name__ == "__main__":
+    build_model_and_train()
