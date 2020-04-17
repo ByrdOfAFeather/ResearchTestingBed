@@ -98,6 +98,7 @@ class GRUDecoder(nn.Module):
 		self.decoder_att_linear = nn.Linear(hidden_size, hidden_size)
 		self.decoder_attn_weighted_ctx = nn.Linear(hidden_size * 2, hidden_size)
 		self.softmax = nn.Softmax()
+		self.log_softmax = nn.LogSoftmax()
 		self.tanh = nn.Tanh()
 
 	def init_weights(self):
@@ -106,9 +107,11 @@ class GRUDecoder(nn.Module):
 				continue
 			nn.init.xavier_uniform_(w)
 
-	def forward(self, x, hidden_state, encoder_attention):
+	def forward(self, x, hidden_state, encoder_attention, pointer_indicies, original_input_info):
 		"""
-		:param x: 
+		:param original_input_info:
+		:param pointer_indicies:
+		:param x:
 		:param hidden_state:
 		:param encoder_attention:
 		:return: 
@@ -116,6 +119,8 @@ class GRUDecoder(nn.Module):
 		batch_size = x.shape[0]
 		no_words = x.shape[1]
 		preds = torch.zeros([batch_size, no_words, BERT_VOCAB_SIZE])
+		original_input_length = original_input_info['original_input_length']
+		original_input_idxes = original_input_info['original_input_idxs']
 		for batch_idx in range(0, batch_size):
 			for word_idx in range(0, no_words):
 				current_word = x[batch_idx, word_idx: word_idx + 1, :]
@@ -124,11 +129,25 @@ class GRUDecoder(nn.Module):
 				else:
 					hidden_state = self.gru_module(current_word, hidden_state)
 
-				preds[batch_idx, word_idx, :] = self.prediction_layer(hidden_state)
-
 				attn_layer = self.decoder_att_linear(hidden_state)
-				attn_layer = self.softmax(torch.matmul(attn_layer, torch.t(encoder_attention[batch_idx])))
+				attn_layer = torch.matmul(attn_layer, torch.t(encoder_attention[batch_idx]))
+
+				attn_max = attn_layer[:, pointer_indicies[str(word_idx)]]
+				max_out = torch.empty([1, original_input_length]).fill_(0)
+				if attn_max.shape[1] != 0:
+					max_out[:, pointer_indicies[str(word_idx)]] = torch.max(attn_max)
+
+				local_preds = self.prediction_layer(hidden_state)
+				max_out_preds = self.log_softmax(torch.cat((local_preds, max_out), dim=1))
+				add = torch.zeros([1, BERT_VOCAB_SIZE])
+				add[:, original_input_idxes] = max_out_preds[:, BERT_VOCAB_SIZE:]
+				local_preds = max_out_preds[:, 0:BERT_VOCAB_SIZE]
+				local_preds = local_preds + add
+				preds[batch_idx, word_idx, :] = local_preds
+
+				attn_layer = self.softmax(attn_layer)
 				attn_layer = torch.matmul(attn_layer, encoder_attention[batch_idx])
 				attn_layer = torch.cat((attn_layer, hidden_state), dim=1)
 				hidden_state = self.tanh(self.decoder_attn_weighted_ctx(attn_layer))
+
 		return preds
