@@ -43,11 +43,7 @@ def _parse_context(paragraph, current_question, include_punc=False):
         ground_truth = [word.translate(punc_filter) for word in ground_truth]
 
     # Embed words
-    if len(context_words) >= 25000:
-        print(context_words)
     context_words = torch.tensor([BERT_TOKENIZER.encode(context_words)])
-    if len(context_words) == 25601:
-        print(context_words)
 
     bio_base = [EMBEDER['O']]  # O to match with BERT's "CRT" Token  TODO: CRT? Or was it another shorten
     char_tracker = 0
