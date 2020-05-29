@@ -33,7 +33,7 @@ class BiAttnGRUEncoder(nn.Module):
 		bi_dir_hidden_size = hidden_size * 2
 		self.hidden_size = hidden_size
 
-		self.bio_tag_embedding = nn.Embedding(3, 3)
+		self.bio_tag_embedding = nn.Embedding(4, 3)
 		self.GLoVE_embedding_layer = embedder
 		# self.GRU = nn.GRU(input_size=input_size, hidden_size=hidden_size, bidirectional=True, batch_first=True)
 		self.gru_module = nn.GRUCell(input_size, hidden_size)
@@ -45,7 +45,7 @@ class BiAttnGRUEncoder(nn.Module):
 		self.sigmoid = nn.Sigmoid()
 		self.tanh = nn.Tanh()
 		# TODO add dropout layer
-		self.dropout_layer = nn.Dropout(p=.5)
+		self.dropout_layer = nn.Dropout(p=.3)
 
 	def init_weights(self):
 		for n, w in self.named_parameters():
@@ -141,7 +141,7 @@ class AttnGruDecoder(nn.Module):
 		self.softmax = nn.Softmax(dim=2)
 		self.tanh = nn.Tanh()
 		# TODO: add dropout parameter
-		self.dropout_layer = nn.Dropout(p=.5)
+		self.dropout_layer = nn.Dropout(p=.3)
 		self.teacher_forcing_ratio = teacher_ratio
 
 	def init_weights(self):

@@ -8,6 +8,7 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
+
 from torch.utils.data import DataLoader
 
 from data_loaders import QADataset, data_load_fn
@@ -21,15 +22,32 @@ BERT_VOCAB_SIZE = 28996
 if torch.cuda.is_available():
 	torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
+import logging
+
+# create logger with 'spam_application'
+log = logging.getLogger('spam_application')
+log.setLevel(logging.DEBUG)
+
+# create formatter and add it to the handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# create file handler which logs even debug messages
+fh = logging.FileHandler('spam.log')
+fh.setLevel(logging.DEBUG)
+fh.setFormatter(formatter)
+log.addHandler(fh)
+
+logging.info("loading pickle rick")
 vectors = bcolz.open(f'{CONFIG.GLOVE_PATH}/6B.300.dat')[:]
 words = pickle.load(open(f'{CONFIG.GLOVE_PATH}/6B.300_words.pkl', 'rb'))
 word2idx = pickle.load(open(f'{CONFIG.GLOVE_PATH}/6B.300_idx.pkl', 'rb'))
+logging.info("loaded")
 
 glove = {w: vectors[word2idx[w]] for w in words}
 dataset = QADataset("data/squad_train_set")
 
 
-def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epochs):
+def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epochs, padding_idx):
 	"""Trains a given encoder and decoder for the number of epcohs provided
 	:param encoder: A model that encodes sentences
 	:param decoder: A model that decodes from a previous encoder hidden state
@@ -57,6 +75,7 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		# for more information on word vectors see: https://dzone.com/articles/introduction-to-word-vectors
 		context_vec = batch['context']
 		answer_tags = batch['answer_tags']
+		answer_tags[answer_tags == padding_idx] = 3
 		output_vec = batch['target']
 
 		encoder.to("cuda")
@@ -67,7 +86,7 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		# Saves the model every 1000 iterations
 		# prints the current sample and prediction for it
 		# It also prints the loss but that is later in the code
-		if i % 100 == 0:
+		if i % 1000 == 0:
 			print(f"TARGET: {target_labels[0]}")
 			for b in range(0, x.shape[0]):
 				print("=====")
@@ -87,8 +106,8 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		target_labels = target_labels.view(-1).long()
 		loss = criterion(x, target_labels)
 		figure_shit_out = target_labels.clone()
-		figure_shit_out[figure_shit_out > 400003] = 0
-		figure_shit_out[figure_shit_out <= 400003] = 1
+		figure_shit_out[figure_shit_out == padding_idx] = 0
+		figure_shit_out[figure_shit_out != padding_idx] = 1
 		loss = loss / sum(figure_shit_out)
 		# This calculates the gradients for all parameters in the encoder and decoder
 		loss.backward()
@@ -202,14 +221,14 @@ decoder_optim = torch.optim.Adam(decoder.parameters(), lr=.001)
 
 # Words are treated as classes and the output of the model is a probability distribution of these classes for
 # each word in the output.
-criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=0)
+criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=max(dataset.used_idxes))
 
 # This creates a dataset compatible with pytorch that auto-shuffles and we don't have to worry about
 # indexing errors
 # check_and_gen_squad()
 
 
-data_loader = DataLoader(dataset, shuffle=True, batch_size=10, collate_fn=data_load_fn)
+data_loader = DataLoader(dataset, shuffle=True, batch_size=2, collate_fn=data_load_fn)
 
-train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, 250000)
+train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, 250000, max(dataset.used_idxes))
 # test(encoder, decoder, data)
