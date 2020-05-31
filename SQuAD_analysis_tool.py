@@ -35,7 +35,6 @@ class MainGUI(tk.Frame):
 			ttk.Label(self.frame, text=i[1]).pack()
 
 	def _handle_options_choice(self, choice):
-		self.reasons.append(self.options_variable.get())
 		saveable = list(choice)
 		saveable.append(self.options_variable.get())
 		self.selections.append(saveable)
@@ -48,6 +47,7 @@ class MainGUI(tk.Frame):
 		self.build_selection()
 
 	def _handle_reason_button_proxy(self):
+		self.reasons.append(self.reasons_entry.get())
 		self.options_variable.set(self.reasons_entry.get())
 
 	def _handle_choice(self, choice):

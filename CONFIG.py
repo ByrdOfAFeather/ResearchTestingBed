@@ -2,14 +2,15 @@ import pickle
 
 import torch
 
-GLOVE_PATH = "data/glove_embeddings/glove_6B"
+DATA_PATH = "data/"
+GLOVE_PATH = f"{DATA_PATH}/glove_embeddings/glove_6B"
 
 
 # Model Information
 INPUT_SIZE = 300
 MAX_INPUT_SEQ_LENGTH = 50
 USES_BERT = False
-WRD_TO_IDX = pickle.load(open(f'{GLOVE_PATH}/6B.300_idx.pkl', 'rb'))
+# WRD_TO_IDX = pickle.load(open(f'{GLOVE_PATH}/6B.300_idx.pkl', 'rb'))
 
 
 if USES_BERT:
