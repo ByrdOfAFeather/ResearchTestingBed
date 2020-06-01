@@ -24,10 +24,10 @@ def _index_tokens(tokens):
 	idxes = []
 	for token in tokens:
 		try:
-			idxes.append([CONFIG.WRD_TO_IDX[token.lower()]])
-			USED_INDEXES[CONFIG.WRD_TO_IDX[token.lower()]] = token.lower()
+			idxes.append([CONFIG.GLoVE_WRD_TO_IDX[token.lower()]])
+			USED_INDEXES[CONFIG.GLoVE_WRD_TO_IDX[token.lower()]] = token.lower()
 		except KeyError:
-			CONFIG.WRD_TO_IDX[token.lower()] = BASE_VOCAB + unknown_words_indx
+			CONFIG.GLoVE_WRD_TO_IDX[token.lower()] = BASE_VOCAB + unknown_words_indx
 			idxes.append([BASE_VOCAB + unknown_words_indx])
 			USED_INDEXES[(BASE_VOCAB + unknown_words_indx)] = token.lower()
 			unknown_words_indx += 1

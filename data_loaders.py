@@ -8,8 +8,6 @@ from torch.utils.data import Dataset
 
 import CONFIG
 
-PADDING_IDX = None
-
 
 class QADataset(Dataset):
 	"""Generic dataset that can be used in question answering tasks
@@ -20,13 +18,12 @@ class QADataset(Dataset):
 	"""
 
 	def __init__(self, data_path):
-		global PADDING_IDX  # TODO: Ew Global
 		self.data_path = data_path
-		with open(f"{self.data_path}/used_idx.json", 'r') as f:
-			self.used_idxes = list(json.load(f)["used"].keys())
-			self.used_idxes = [int(idx) for idx in self.used_idxes]
-			self.used_idxes.append(max(self.used_idxes) + 1)
-			PADDING_IDX = max(self.used_idxes)
+		# with open(f"{self.data_path}/used_idx.json", 'r') as f:
+		# 	self.used_idxes = list(json.load(f)["used"].keys())
+		# 	self.used_idxes = [int(idx) for idx in self.used_idxes]
+		# 	self.used_idxes.append(max(self.used_idxes) + 1)
+		# 	PADDING_IDX = max(self.used_idxes)
 
 	def __len__(self):
 		return len(os.listdir(self.data_path)) - 1  # -1 comes from a generation file
@@ -52,40 +49,40 @@ def data_load_fn(batch):
 
 	for batch_idx, batch_itm in enumerate(batch):
 		indexing_start = batch[batch_idx]['answer_tags'][0].index(1)
-		assert batch_itm['context'][0][0] == 400002, f"start token not present, {batch_itm['context']}"
+		assert batch_itm['context'][0][0] == CONFIG.START_TOKEN_IDX, f"start token not present, {batch_itm['context']}"
 		padd = math.ceil(CONFIG.MAX_INPUT_SEQ_LENGTH / 2)
 		start_index = max(indexing_start - padd, 0)
 		batch_itm['context'] = batch_itm['context'][start_index: indexing_start + padd]
-		batch_itm['context'][0] = [400002]
-		batch_itm['context'][-1] = [400003]
+		batch_itm['context'][0] = [CONFIG.START_TOKEN_IDX]
+		batch_itm['context'][-1] = [CONFIG.END_TOKEN_IDX]
 		batch_itm['answer_tags'] = batch_itm['answer_tags'][0][start_index: indexing_start + padd]
 
 		original_contexts[batch_idx, :, :] = torch.t(nn.functional.pad(torch.tensor(batch_itm['context']),
 		                                                               [0, 0, 0, 50 - len(batch_itm['context'])],
-		                                                               value=PADDING_IDX))
+		                                                               value=CONFIG.PADD_TOKEN_IDX))
 
 		contexts[batch_idx, :, :] = \
 			nn.functional.pad(torch.tensor([batch_itm['context']]),
 			                  [0, 0, 0, 50 - len(batch_itm['context'])],
-			                  value=PADDING_IDX)
+			                  value=CONFIG.PADD_TOKEN_IDX)
 
 		answer_tag[batch_idx, :] = torch.t(nn.functional.pad(torch.tensor(batch_itm['answer_tags']),
 		                                                     [0, 50 - len(batch_itm['answer_tags'])],
-		                                                     value=PADDING_IDX))
+		                                                     value=CONFIG.ANSWER_PADD_IDX))
 
 		original_targets[batch_idx, :, :] = torch.t(nn.functional.pad(torch.tensor(batch_itm['target']),
 		                                                              [0,
 		                                                               0,
 		                                                               0,
 		                                                               max_length_target - len(batch_itm["target"])],
-		                                                              value=PADDING_IDX))
+		                                                              value=CONFIG.PADD_TOKEN_IDX))
 
 		targets[batch_idx, :, :] = nn.functional.pad(torch.tensor(batch_itm['target']),
 		                                             [0,
 		                                              0,
 		                                              0,
 		                                              max_length_target - len(batch_itm["target"])],
-		                                             value=PADDING_IDX)
+		                                             value=CONFIG.PADD_TOKEN_IDX)
 
 	return {"context": contexts,
 	        "target": targets,

@@ -8,7 +8,7 @@ import CONFIG
 # 1) Get the max vocab size: let's limit it to BERT -- DONE
 # 2) Get Word idxs and save them to JSON file
 
-MAX_VOCAB_SIZE = 28996
+
 PUNC_FILTER = str.maketrans('', '', string.punctuation)
 EMBEDER = {
 	"B": 1,
@@ -16,25 +16,19 @@ EMBEDER = {
 	"O": 0,
 }
 EXCEPTIONS = {"\"", "("}
-UNKNOWN_IDX = 0  # TODO
 
 
-def _index_tokens(tokens, vocab_list):
+def _index_tokens(tokens, wrd_to_idx):
 	idxes = []
 	for token in tokens:
-		if token in vocab_list:
-			try:
-				CONFIG.WRD_TO_IDX[token.lower()]
-			except KeyError:
-				print("Word in vocabulary that doesn't exist in GLoVE!")
-				import sys
-				sys.exit(0)
-		else:
-			idxes.append(UNKNOWN_IDX)
+		try:
+			idxes.append([wrd_to_idx[token.lower()]["custom_vocab_idx"]])
+		except KeyError:
+			idxes.append([CONFIG.UNKNOWN_TOKEN_IDX])
 	return idxes
 
 
-def _parse_context(paragraph, current_question, include_punc=False):
+def _parse_context(paragraph, current_question, wrd_to_idx, include_punc=False):
 	punc_filter = str.maketrans('', '', string.punctuation)
 
 	context_text = paragraph['context']
@@ -50,7 +44,7 @@ def _parse_context(paragraph, current_question, include_punc=False):
 		context_words = [word.translate(punc_filter) for word in context_words]
 		ground_truth = [word.translate(punc_filter) for word in ground_truth]
 
-	_context_words = _index_tokens(context_words)
+	_context_words = _index_tokens(context_words, wrd_to_idx)
 
 	bio_base = []  # O to match with BERT's "CRT" Token  TODO: CRT? Or was it another shorten
 	char_tracker = 0
@@ -86,9 +80,9 @@ def _parse_context(paragraph, current_question, include_punc=False):
 
 	# Embed words
 	_context_words = _context_words[max(0, start_index - 255): start_index + 255]
-	context_words = [[400002]]
+	context_words = [[CONFIG.START_TOKEN_IDX]]
 	context_words.extend(_context_words)
-	context_words.append([400003])
+	context_words.append([CONFIG.END_TOKEN_IDX])
 
 	bio_base = bio_base[max(0, start_index - 255): start_index + 255]
 	bio_base.insert(0, EMBEDER["O"])
@@ -105,13 +99,13 @@ def _parse_context(paragraph, current_question, include_punc=False):
 
 	if len(ground_truth) > 1000:
 		return None, None, None
-	ground_truth = _index_tokens(ground_truth)
+	ground_truth = _index_tokens(ground_truth, wrd_to_idx)
 
 	_ground_truth = ground_truth
-	ground = [[400002]]
+	ground = [[CONFIG.START_TOKEN_IDX]]
 	ground.extend(ground_truth)
 	ground_truth = ground
-	ground_truth.append([400003])
+	ground_truth.append([CONFIG.END_TOKEN_IDX])
 
 	assert len(bio_base) == len(context_words), f'The BIO tags are not equal in length to the embeddings! ' \
 	                                            f'{answer_info} & {len(bio_base)} & {len(context_words)}'
@@ -119,7 +113,7 @@ def _parse_context(paragraph, current_question, include_punc=False):
 
 
 def sample_most_used_words():
-	"""Looks through all of the SQuAD dataset and samples the most used words
+	"""Looks through all of the SQuAD dataset and samples the most used words that also appear in the GLoVE vocabulary
 	:return:
 	"""
 	word_dict = {}
@@ -145,13 +139,52 @@ def sample_most_used_words():
 					except KeyError:
 						word_dict[word] = 1
 
-	result = sorted(list(word_dict.items()), key=lambda x: x[1])
-	# TODO: write this out as a file
-	return result[-MAX_VOCAB_SIZE:]
+	result = sorted(list(word_dict.items()), key=lambda x: -x[1])
+	return_strings = []
+	idx = 0
+	wrd_to_idx = {}
+	idx_to_idx = {}
+	for wrd_res, _ in result:
+		if len(return_strings) == CONFIG.USABLE_VOCAB + 1:
+			break
+		else:
+			try:
+				glove_idx = CONFIG.GLoVE_WRD_TO_IDX[wrd_res]
+				wrd_to_idx[wrd_res] = {"custom_vocab_idx": idx, "glove_idx": glove_idx}
+				idx_to_idx[idx] = wrd_res
+				idx += 1
+				return_strings.append(wrd_res)
+			except KeyError:
+				continue
+
+	with open(f"{CONFIG.DATA_PATH}/vocab.json", 'w') as f:
+		json.dump(idx_to_idx, f)
+	return return_strings, wrd_to_idx
 
 
 def pre_process():
-	vocab = sample_most_used_words()
-	word_set = set([word[0] for word in vocab])
+	vocab, wrd_to_idx = sample_most_used_words()
+	word_set = set(vocab)
+	data_json = json.load(open(f'{CONFIG.DATA_PATH}/train-v2.0.json', 'r'))
+	overall_qas_idx = 0
+	for overall_idx, _ in enumerate(data_json['data']):
+		for paragraphs in data_json['data'][overall_idx]['paragraphs']:
+			for qas_idx, question_answer in enumerate(paragraphs['qas']):
+				if question_answer["is_impossible"]:
+					continue
 
-	pass
+				embedding, tags, ground_truth = _parse_context(paragraphs, qas_idx,
+				                                               wrd_to_idx)
+				if embedding is None: continue
+				tags = [tags]
+				embedding = embedding
+				ground_truth = ground_truth
+
+				json_for_ex = {"context": embedding, "answer_tags": tags, "target": ground_truth}
+				with open(f"data/squad_train_set/item_{overall_qas_idx}.json", 'w') as file:
+					json.dump(json_for_ex, file)
+
+				overall_qas_idx += 1
+
+
+sample_most_used_words()

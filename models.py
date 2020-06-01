@@ -1,12 +1,20 @@
+import json
+import pickle
+
 import torch
 import torch.nn as nn
 
 # from CONFIG import BERT_MODEL, BERT_ENCODER
 from numpy.random import choice
 
+import CONFIG
+
 BERT_VOCAB_SIZE = 28996
 MAX_OUTPUT = 20
 INPUT_SIZE = 768
+with open(f"{CONFIG.DATA_PATH}/vocab.json") as f:
+	vocab = json.load(f)
+
 
 if torch.cuda.is_available():
 	torch.set_default_tensor_type('torch.cuda.FloatTensor')
@@ -151,10 +159,11 @@ class AttnGruDecoder(nn.Module):
 			nn.init.xavier_uniform_(w)
 
 	def greedy_search(self, hidden_state, encoder_attention):
-		preds = torch.zeros([MAX_OUTPUT, 1])
+		preds = torch.zeros([MAX_OUTPUT, 1]).long()
 		generated_sequence = []
 		no_outputted = 0
-		current_words = self.embedder(torch.tensor([[101]]))
+		current_words = self.GLoVE_embedder(torch.tensor([[101]])).squeeze(1)
+		print(current_words.shape)
 		while True:
 			if no_outputted == MAX_OUTPUT:
 				break
@@ -164,9 +173,20 @@ class AttnGruDecoder(nn.Module):
 			preds[no_outputted, :] = torch.argmax(
 				torch.nn.functional.softmax(self.prediction_layer(hidden_state), dim=1))
 
-			current_words = self.embedder(
-				torch.tensor(preds[no_outputted, :].unsqueeze(0).type(torch.LongTensor), device='cuda'))
-			# generated_sequence.append(BERT_ENCODER.decode(torch.tensor([preds[no_outputted: no_outputted + 1, 0]])))
+			current_words = self.GLoVE_embedder(
+				torch.tensor(preds[no_outputted, :].unsqueeze(0).type(torch.LongTensor), device='cuda')).squeeze(1)
+			pred_idx = str(preds[no_outputted, 0].item())
+			try:
+				generated_sequence.append(vocab[str(preds[no_outputted: no_outputted + 1, 0].item())])
+			except KeyError:
+				if pred_idx == '28998':
+					generated_sequence.append("<START>")
+				elif pred_idx == '28997':
+					generated_sequence.append("<UNK>")
+				elif pred_idx == '28999':
+					generated_sequence.append("<END>")
+				else:
+					generated_sequence.append("<PADD>")
 			if generated_sequence[no_outputted] == 102: break
 
 			attn_layer = self.decoder_att_linear(hidden_state)

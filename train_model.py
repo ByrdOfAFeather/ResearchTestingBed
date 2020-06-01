@@ -1,3 +1,4 @@
+import json
 import os
 import pickle
 
@@ -22,26 +23,11 @@ BERT_VOCAB_SIZE = 28996
 if torch.cuda.is_available():
 	torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-import logging
-
-# create logger with 'spam_application'
-log = logging.getLogger('spam_application')
-log.setLevel(logging.DEBUG)
-
-# create formatter and add it to the handlers
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-# create file handler which logs even debug messages
-fh = logging.FileHandler('spam.log')
-fh.setLevel(logging.DEBUG)
-fh.setFormatter(formatter)
-log.addHandler(fh)
-
-logging.info("loading pickle rick")
 vectors = bcolz.open(f'{CONFIG.GLOVE_PATH}/6B.300.dat')[:]
 words = pickle.load(open(f'{CONFIG.GLOVE_PATH}/6B.300_words.pkl', 'rb'))
 word2idx = pickle.load(open(f'{CONFIG.GLOVE_PATH}/6B.300_idx.pkl', 'rb'))
-logging.info("loaded")
+with open(f"{CONFIG.DATA_PATH}/vocab.json") as f:
+	vocab = json.load(f)
 
 glove = {w: vectors[word2idx[w]] for w in words}
 dataset = QADataset("data/squad_train_set")
@@ -94,9 +80,17 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 				pred = []
 				for w in range(0, x[b].shape[0]):
 					try:
-						pred.append(words[torch.argmax(torch.softmax(x[b][w], 0), dim=0)])
-					except IndexError:
-						pred.append("UNK")
+						pred.append(vocab[str(torch.argmax(torch.softmax(x[b][w], 0), dim=0).item())])
+					except KeyError:
+						pred_idx = str(torch.argmax(torch.softmax(x[b][w], 0), dim=0).item())
+						if pred_idx == '28998':
+							pred.append("<START>")
+						elif pred_idx == '28997':
+							pred.append("<UNK>")
+						elif pred_idx == '28999':
+							pred.append("<END>")
+						else:
+							pred.append("<PADD>")
 				print(f"PRED: {pred}")
 				print("=====")
 			torch.save(encoder.state_dict(), f'pre_trained/weight_saves/encoder_{i}')
@@ -106,8 +100,8 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		target_labels = target_labels.view(-1).long()
 		loss = criterion(x, target_labels)
 		figure_shit_out = target_labels.clone()
-		figure_shit_out[figure_shit_out == padding_idx] = 0
 		figure_shit_out[figure_shit_out != padding_idx] = 1
+		figure_shit_out[figure_shit_out == padding_idx] = 0
 		loss = loss / sum(figure_shit_out)
 		# This calculates the gradients for all parameters in the encoder and decoder
 		loss.backward()
@@ -120,14 +114,14 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		cum_loss += loss.item() / BATCH_SIZE
 
 		del loss
-
-		# if i % 1000 == 0 and i != 0:
-		# 	end = datetime.now()
-		# 	with open("log.txt", "a") as f:
-		# 		f.write(f"Reached iteration {i} with loss {cum_loss / 990}\n")
-		# 	print(i, cum_loss / 999)
-		# 	print(f"Took {end - start}")
-		# 	cum_loss = 0
+		#
+		if i % 1000 == 0 and i != 0:
+			end = datetime.now()
+			# with open("log.txt", "a") as f:
+			# 	f.write(f"Reached iteration {i} with loss {cum_loss / 990}\n")
+			print(i, cum_loss / 999)
+			print(f"Took {end - start}")
+			cum_loss = 0
 		#
 		# for n, w in encoder.named_parameters():
 		# 	if w.grad is None:
@@ -185,11 +179,11 @@ def test(encoder, decoder, input_data):
 # and instead just encapsulate everything as-is. If this space is very small the model might be unable to learn
 # as it simply can't find what is important in the data. The size 600 here comes from the original paper and is
 # what they found to be best.
-weight_matrix = torch.zeros([max(dataset.used_idxes), 300])
-for word_idx in range(0, max(dataset.used_idxes)):
-	try:
-		weight_matrix[word_idx, :] = torch.tensor(glove[words[word_idx]])
-	except IndexError:
+weight_matrix = torch.zeros([CONFIG.MAX_VOCAB_SIZE, 300])
+for word_idx in range(0, CONFIG.MAX_VOCAB_SIZE):
+	if word_idx <= CONFIG.USABLE_VOCAB:
+		weight_matrix[word_idx, :] = torch.tensor(glove[vocab[str(word_idx)]])
+	else:
 		weight_matrix[word_idx, :] = torch.rand([300])
 
 embedder = GloVeEmbedder(weight_matrix)
@@ -197,10 +191,10 @@ encoder = BiAttnGRUEncoder(input_size=CONFIG.INPUT_SIZE + 3, hidden_size=600, em
 encoder.init_weights()
 
 # The hidden size is notably doubled here due to the encoder being bi-directional. The decoder also doesn't take
-# BIO tags as input. Instead it takes the previously predicted word, or in the case of teacher forcing, the ground
+# BIO tags as input. Instead it takes   the previously predicted word, or in the case of teacher forcing, the ground
 # truth.
 decoder = AttnGruDecoder(input_size=CONFIG.INPUT_SIZE, hidden_size=1200, teacher_ratio=.5, embedder=embedder,
-                         vocab_size=max(dataset.used_idxes))
+                         vocab_size=CONFIG.MAX_VOCAB_SIZE)
 decoder.init_weights()
 
 # TODO CHANGE
@@ -208,12 +202,12 @@ if not os.path.exists("pre_trained"): os.mkdir("pre_trained")
 if not os.path.exists("pre_trained/weight_saves"): os.mkdir("pre_trained/weight_saves")
 
 # This line loads weights if they are already present
-# if os.path.exists("pre_trained/weight_saves/encoder"):
-# 	print("loaded weights")
-# 	encoder.load_state_dict(torch.load("pre_trained/weight_saves/encoder"))
-# if os.path.exists("pre_trained/weight_saves/decoder"):
-# 	print("loaded weights")
-# 	decoder.load_state_dict(torch.load("pre_trained/weight_saves/decoder"))
+if os.path.exists("pre_trained/weight_saves/encoder"):
+	print("loaded weights")
+	encoder.load_state_dict(torch.load("pre_trained/weight_saves/encoder"))
+if os.path.exists("pre_trained/weight_saves/decoder"):
+	print("loaded weights")
+	decoder.load_state_dict(torch.load("pre_trained/weight_saves/decoder"))
 
 # These optimizers take care of adjusting learning rate according to gradient size
 encoder_optim = torch.optim.Adam(encoder.parameters(), lr=.001)
@@ -221,14 +215,14 @@ decoder_optim = torch.optim.Adam(decoder.parameters(), lr=.001)
 
 # Words are treated as classes and the output of the model is a probability distribution of these classes for
 # each word in the output.
-criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=max(dataset.used_idxes))
+criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=CONFIG.PADD_TOKEN_IDX)
 
 # This creates a dataset compatible with pytorch that auto-shuffles and we don't have to worry about
 # indexing errors
 # check_and_gen_squad()
 
 
-data_loader = DataLoader(dataset, shuffle=True, batch_size=2, collate_fn=data_load_fn)
+data_loader = DataLoader(dataset, shuffle=True, batch_size=1, collate_fn=data_load_fn)
 
-train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, 250000, max(dataset.used_idxes))
-# test(encoder, decoder, data)
+# train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, 250000, CONFIG.PADD_TOKEN_IDX)
+test(encoder, decoder, data_loader)

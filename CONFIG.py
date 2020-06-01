@@ -7,10 +7,17 @@ GLOVE_PATH = f"{DATA_PATH}/glove_embeddings/glove_6B"
 
 
 # Model Information
+MAX_VOCAB_SIZE = 28996 + 4
+USABLE_VOCAB = MAX_VOCAB_SIZE - 4  # save space for unkown token, start token, end token
+UNKNOWN_TOKEN_IDX = USABLE_VOCAB + 1
+START_TOKEN_IDX = USABLE_VOCAB + 2
+END_TOKEN_IDX = USABLE_VOCAB + 3
+PADD_TOKEN_IDX = USABLE_VOCAB + 4
+ANSWER_PADD_IDX = 3
 INPUT_SIZE = 300
 MAX_INPUT_SEQ_LENGTH = 50
 USES_BERT = False
-# WRD_TO_IDX = pickle.load(open(f'{GLOVE_PATH}/6B.300_idx.pkl', 'rb'))
+GLoVE_WRD_TO_IDX = pickle.load(open(f'{GLOVE_PATH}/6B.300_idx.pkl', 'rb'))
 
 
 if USES_BERT:
