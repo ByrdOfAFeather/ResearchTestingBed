@@ -19,11 +19,12 @@ class QADataset(Dataset):
 
 	def __init__(self, data_path):
 		self.data_path = data_path
-		# with open(f"{self.data_path}/used_idx.json", 'r') as f:
-		# 	self.used_idxes = list(json.load(f)["used"].keys())
-		# 	self.used_idxes = [int(idx) for idx in self.used_idxes]
-		# 	self.used_idxes.append(max(self.used_idxes) + 1)
-		# 	PADDING_IDX = max(self.used_idxes)
+
+	# with open(f"{self.data_path}/used_idx.json", 'r') as f:
+	# 	self.used_idxes = list(json.load(f)["used"].keys())
+	# 	self.used_idxes = [int(idx) for idx in self.used_idxes]
+	# 	self.used_idxes.append(max(self.used_idxes) + 1)
+	# 	PADDING_IDX = max(self.used_idxes)
 
 	def __len__(self):
 		return len(os.listdir(self.data_path)) - 1  # -1 comes from a generation file
@@ -58,16 +59,18 @@ def data_load_fn(batch):
 		batch_itm['answer_tags'] = batch_itm['answer_tags'][0][start_index: indexing_start + padd]
 
 		original_contexts[batch_idx, :, :] = torch.t(nn.functional.pad(torch.tensor(batch_itm['context']),
-		                                                               [0, 0, 0, 50 - len(batch_itm['context'])],
+		                                                               [0, 0, 0, CONFIG.MAX_INPUT_SEQ_LENGTH - len(
+			                                                               batch_itm['context'])],
 		                                                               value=CONFIG.PADD_TOKEN_IDX))
 
 		contexts[batch_idx, :, :] = \
 			nn.functional.pad(torch.tensor([batch_itm['context']]),
-			                  [0, 0, 0, 50 - len(batch_itm['context'])],
+			                  [0, 0, 0, CONFIG.MAX_INPUT_SEQ_LENGTH - len(batch_itm['context'])],
 			                  value=CONFIG.PADD_TOKEN_IDX)
 
 		answer_tag[batch_idx, :] = torch.t(nn.functional.pad(torch.tensor(batch_itm['answer_tags']),
-		                                                     [0, 50 - len(batch_itm['answer_tags'])],
+		                                                     [0, CONFIG.MAX_INPUT_SEQ_LENGTH - len(
+			                                                     batch_itm['answer_tags'])],
 		                                                     value=CONFIG.ANSWER_PADD_IDX))
 
 		original_targets[batch_idx, :, :] = torch.t(nn.functional.pad(torch.tensor(batch_itm['target']),

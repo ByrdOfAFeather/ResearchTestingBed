@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import pickle
 
@@ -79,18 +80,8 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 				# print(f"ORIGINAL: {CONFIG.BERT_ENCODER.decode(target_labels[b].view(-1))}")
 				pred = []
 				for w in range(0, x[b].shape[0]):
-					try:
-						pred.append(vocab[str(torch.argmax(torch.softmax(x[b][w], 0), dim=0).item())])
-					except KeyError:
-						pred_idx = str(torch.argmax(torch.softmax(x[b][w], 0), dim=0).item())
-						if pred_idx == '28998':
-							pred.append("<START>")
-						elif pred_idx == '28997':
-							pred.append("<UNK>")
-						elif pred_idx == '28999':
-							pred.append("<END>")
-						else:
-							pred.append("<PADD>")
+					pred.append(vocab[str(torch.argmax(torch.softmax(x[b][w], 0), dim=0).item())])
+
 				print(f"PRED: {pred}")
 				print("=====")
 			torch.save(encoder.state_dict(), f'pre_trained/weight_saves/encoder_{i}')
@@ -160,6 +151,28 @@ def test(encoder, decoder, input_data):
 		answer_tags = data['answer_tags']
 		output_vec = data['target']
 
+		ctx = []
+		for idx, word in enumerate(context_vec[0].long()):
+			word = str(word.item())
+			prependable = ''
+			appendable = ''
+			if answer_tags[0][idx].item() == 1:
+				prependable = "|"
+				if idx == answer_tags[0].shape[0] - 1:
+					appendable = "|"
+				elif answer_tags[0][idx + 1].item() != 2:
+					appendable = "|"
+			if answer_tags[0][idx].item() == 2:
+				if idx == answer_tags[0].shape[0] - 1:
+					appendable = "|"
+				else:
+					if answer_tags[0][idx + 1] != 2:
+						appendable = "|"
+
+			ctx.append(prependable + vocab[word] + appendable)
+		print("=========== NEW SEQUENCE ============")
+		print(ctx)
+
 		encoder.train(False)
 		decoder.train(False)
 
@@ -202,16 +215,16 @@ if not os.path.exists("pre_trained"): os.mkdir("pre_trained")
 if not os.path.exists("pre_trained/weight_saves"): os.mkdir("pre_trained/weight_saves")
 
 # This line loads weights if they are already present
-if os.path.exists("pre_trained/weight_saves/encoder"):
-	print("loaded weights")
-	encoder.load_state_dict(torch.load("pre_trained/weight_saves/encoder"))
-if os.path.exists("pre_trained/weight_saves/decoder"):
-	print("loaded weights")
-	decoder.load_state_dict(torch.load("pre_trained/weight_saves/decoder"))
+# if os.path.exists("pre_trained/weight_saves/encoder"):
+# 	print("loaded weights")
+# 	encoder.load_state_dict(torch.load("pre_trained/weight_saves/encoder"))
+# if os.path.exists("pre_trained/weight_saves/decoder"):
+# 	print("loaded weights")
+# 	decoder.load_state_dict(torch.load("pre_trained/weight_saves/decoder"))
 
 # These optimizers take care of adjusting learning rate according to gradient size
-encoder_optim = torch.optim.Adam(encoder.parameters(), lr=.001)
-decoder_optim = torch.optim.Adam(decoder.parameters(), lr=.001)
+encoder_optim = torch.optim.Adagrad(encoder.parameters())
+decoder_optim = torch.optim.Adagrad(decoder.parameters())
 
 # Words are treated as classes and the output of the model is a probability distribution of these classes for
 # each word in the output.
@@ -222,7 +235,7 @@ criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=CONFIG.PADD_TOK
 # check_and_gen_squad()
 
 
-data_loader = DataLoader(dataset, shuffle=True, batch_size=1, collate_fn=data_load_fn)
+data_loader = DataLoader(dataset, shuffle=True, batch_size=20, collate_fn=data_load_fn)
 
-# train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, 250000, CONFIG.PADD_TOKEN_IDX)
-test(encoder, decoder, data_loader)
+train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, math.floor(len(data_loader) * 20 / 30), CONFIG.PADD_TOKEN_IDX)
+# test(encoder, decoder, data_loader)

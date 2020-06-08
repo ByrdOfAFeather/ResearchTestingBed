@@ -57,7 +57,7 @@ class BiAttnGRUEncoder(nn.Module):
 
 	def init_weights(self):
 		for n, w in self.named_parameters():
-			if "bias" in n:
+			if "bias" in n or "GLoVE" in n:
 				continue
 			nn.init.xavier_uniform_(w)
 
@@ -154,7 +154,7 @@ class AttnGruDecoder(nn.Module):
 
 	def init_weights(self):
 		for n, w in self.named_parameters():
-			if "bias" in n:
+			if "bias" in n or "GLoVE" in n:
 				continue
 			nn.init.xavier_uniform_(w)
 
@@ -162,32 +162,12 @@ class AttnGruDecoder(nn.Module):
 		preds = torch.zeros([MAX_OUTPUT, 1]).long()
 		generated_sequence = []
 		no_outputted = 0
-		current_words = self.GLoVE_embedder(torch.tensor([[101]])).squeeze(1)
-		print(current_words.shape)
+		current_words = self.GLoVE_embedder(torch.tensor([[CONFIG.START_TOKEN_IDX]])).squeeze(1)
 		while True:
 			if no_outputted == MAX_OUTPUT:
 				break
 
 			hidden_state = self.gru_module(current_words, hidden_state)
-
-			preds[no_outputted, :] = torch.argmax(
-				torch.nn.functional.softmax(self.prediction_layer(hidden_state), dim=1))
-
-			current_words = self.GLoVE_embedder(
-				torch.tensor(preds[no_outputted, :].unsqueeze(0).type(torch.LongTensor), device='cuda')).squeeze(1)
-			pred_idx = str(preds[no_outputted, 0].item())
-			try:
-				generated_sequence.append(vocab[str(preds[no_outputted: no_outputted + 1, 0].item())])
-			except KeyError:
-				if pred_idx == '28998':
-					generated_sequence.append("<START>")
-				elif pred_idx == '28997':
-					generated_sequence.append("<UNK>")
-				elif pred_idx == '28999':
-					generated_sequence.append("<END>")
-				else:
-					generated_sequence.append("<PADD>")
-			if generated_sequence[no_outputted] == 102: break
 
 			attn_layer = self.decoder_att_linear(hidden_state)
 			attn_layer = torch.nn.functional.softmax(torch.matmul(attn_layer, torch.t(encoder_attention[0])), dim=1)
@@ -195,6 +175,14 @@ class AttnGruDecoder(nn.Module):
 			attn_layer = torch.cat((attn_layer, hidden_state), dim=1)
 			hidden_state = self.tanh(self.decoder_attn_weighted_ctx(attn_layer))
 
+			preds[no_outputted, :] = torch.argmax(
+				torch.nn.functional.softmax(self.prediction_layer(hidden_state), dim=1))
+
+			current_words = self.GLoVE_embedder(
+				torch.tensor(preds[no_outputted, :].unsqueeze(0).type(torch.LongTensor), device='cuda')).squeeze(1)
+			pred_idx = str(preds[no_outputted, 0].item())
+			generated_sequence.append(vocab[pred_idx])
+			if pred_idx == str(CONFIG.END_TOKEN_IDX): break
 			no_outputted += 1
 		print(generated_sequence)
 		return generated_sequence
@@ -218,7 +206,7 @@ class AttnGruDecoder(nn.Module):
 				if teacher_forcing_decisions[word_idx] == 1 and word_idx != 0:
 					current_words = self.GLoVE_embedder(x[:, word_idx, :]).squeeze(1)
 				elif word_idx == 0:
-					current_words = self.GLoVE_embedder(torch.tensor([[101] for _ in range(0, batch_size)])).squeeze(1)
+					current_words = self.GLoVE_embedder(torch.tensor([[CONFIG.START_TOKEN_IDX] for _ in range(0, batch_size)])).squeeze(1)
 				else:
 					current_words = self.GLoVE_embedder(torch.tensor(
 						torch.argmax(preds[:, word_idx - 1, :], dim=1).long(), device='cuda'))

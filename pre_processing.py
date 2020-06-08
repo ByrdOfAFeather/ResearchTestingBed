@@ -157,6 +157,11 @@ def sample_most_used_words():
 			except KeyError:
 				continue
 
+	idx_to_idx[CONFIG.START_TOKEN_IDX] = "<START>"
+	idx_to_idx[CONFIG.END_TOKEN_IDX] = "<END>"
+	idx_to_idx[CONFIG.PADD_TOKEN_IDX] = "<PADD>"
+	idx_to_idx[CONFIG.UNKNOWN_TOKEN_IDX] = "<UNK>"
+
 	with open(f"{CONFIG.DATA_PATH}/vocab.json", 'w') as f:
 		json.dump(idx_to_idx, f)
 	return return_strings, wrd_to_idx
