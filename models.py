@@ -204,7 +204,7 @@ class AttnGruDecoder(nn.Module):
 			x = x.long()
 			for word_idx in range(0, no_words):
 				if teacher_forcing_decisions[word_idx] == 1 and word_idx != 0:
-					current_words = self.GLoVE_embedder(x[:, word_idx, :]).squeeze(1)
+					current_words = self.GLoVE_embedder(x[:, word_idx - 1, :]).squeeze(1)
 				elif word_idx == 0:
 					current_words = self.GLoVE_embedder(torch.tensor([[CONFIG.START_TOKEN_IDX] for _ in range(0, batch_size)])).squeeze(1)
 				else:
