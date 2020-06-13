@@ -25,6 +25,7 @@ class GloVeEmbedder(nn.Module):
 		super(GloVeEmbedder, self).__init__()
 		self.embedder = nn.Embedding(weight_matrix.shape[0], weight_matrix.shape[1])
 		self.embedder.from_pretrained(weight_matrix)
+		self.embedder.weight.requires_grad = False
 
 	def forward(self, x):
 		return self.embedder(x)
@@ -46,6 +47,8 @@ class BiAttnGRUEncoder(nn.Module):
 		# self.GRU = nn.GRU(input_size=input_size, hidden_size=hidden_size, bidirectional=True, batch_first=True)
 		self.gru_module = nn.GRUCell(input_size, hidden_size)
 		self.backwards_gru_module = nn.GRUCell(input_size, hidden_size)
+		self.gru_module_layer_2 = nn.GRUCell(hidden_size, hidden_size)
+		self.backwards_gru_module_layer_2 = nn.GRUCell(hidden_size, hidden_size)
 		self.encoder_att_g_gate = nn.Linear(bi_dir_hidden_size * 2, bi_dir_hidden_size)
 		self.encoder_att_f_gate = nn.Linear(bi_dir_hidden_size * 2, bi_dir_hidden_size)
 		self.encoder_att_linear = nn.Linear(bi_dir_hidden_size, bi_dir_hidden_size)
@@ -100,6 +103,7 @@ class BiAttnGRUEncoder(nn.Module):
 		no_words = context.shape[1]
 		answer_tags = answer_tags.type(torch.long)
 		hidden_state_forward = torch.zeros([batch_size, self.hidden_size])
+		hidden_state_forward_layer_2 = torch.zeros([batch_size, self.hidden_size])
 		context = self.GLoVE_embedding_layer(context.long()).squeeze(2)
 		context = torch.cat((context, self.bio_tag_embedding(answer_tags)), dim=2)
 
@@ -110,16 +114,20 @@ class BiAttnGRUEncoder(nn.Module):
 			current_words = context[:, word_idx, :]
 			hidden_state_forward = self.gru_module(current_words, hidden_state_forward)
 			hidden_state_forward = self.dropout_layer(hidden_state_forward)
-			forward_states[:, word_idx, :] = hidden_state_forward
+			hidden_state_forward_layer_2 = self.gru_module_layer_2(hidden_state_forward, hidden_state_forward_layer_2)
+			forward_states[:, word_idx, :] = hidden_state_forward_layer_2
 
 		# This computes the backwards stage of the GRU.
 		backward_states = torch.zeros([batch_size, no_words, self.hidden_size])
 		hidden_state_backward = torch.zeros([batch_size, self.hidden_size])
+		hidden_state_backward_layer_2 = torch.zeros([batch_size, self.hidden_size])
 		for word_idx in range(0, no_words):
 			current_word = context[:, no_words - word_idx - 1, :]
 			hidden_state_backward = self.backwards_gru_module(current_word, hidden_state_backward)
 			hidden_state_backward = self.dropout_layer(hidden_state_backward)
-			backward_states[:, word_idx, :] = hidden_state_backward
+			hidden_state_backward_layer_2 = self.backwards_gru_module_layer_2(hidden_state_backward,
+			                                                                  hidden_state_backward_layer_2)
+			backward_states[:, word_idx, :] = hidden_state_backward_layer_2
 
 		# last_hidden_state = torch.zeros([batch_size, self.hidden_size * 2])
 		all_hidden_states = torch.cat((forward_states, backward_states), dim=2)
@@ -128,8 +136,10 @@ class BiAttnGRUEncoder(nn.Module):
 		# Finally we compute the attention
 		attn = self.calc_attention(all_hidden_states)
 
+		concatenation = torch.cat((hidden_state_forward, hidden_state_backward), dim=1)
+
 		# and return the last hidden state as well as the attention
-		return torch.cat((hidden_state_forward, hidden_state_backward), dim=1), attn
+		return concatenation, attn
 
 
 class AttnGruDecoder(nn.Module):
@@ -149,7 +159,7 @@ class AttnGruDecoder(nn.Module):
 		self.softmax = nn.Softmax(dim=2)
 		self.tanh = nn.Tanh()
 		# TODO: add dropout parameter
-		self.dropout_layer = nn.Dropout(p=.3)
+		self.dropout_layer = nn.Dropout(p=.6)
 		self.teacher_forcing_ratio = teacher_ratio
 
 	def init_weights(self):
@@ -194,7 +204,6 @@ class AttnGruDecoder(nn.Module):
 		:param encoder_attention: The attention as calculated by the encoder
 		:return:
 		"""
-
 		if self.training:
 			batch_size = x.shape[0]
 			no_words = x.shape[1]

@@ -62,7 +62,6 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		# for more information on word vectors see: https://dzone.com/articles/introduction-to-word-vectors
 		context_vec = batch['context']
 		answer_tags = batch['answer_tags']
-		answer_tags[answer_tags == padding_idx] = 3
 		output_vec = batch['target']
 
 		encoder.to("cuda")
@@ -105,40 +104,6 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		cum_loss += loss.item() / BATCH_SIZE
 
 		del loss
-		#
-		if i % 1000 == 0 and i != 0:
-			end = datetime.now()
-			# with open("log.txt", "a") as f:
-			# 	f.write(f"Reached iteration {i} with loss {cum_loss / 990}\n")
-			print(i, cum_loss / 999)
-			print(f"Took {end - start}")
-			cum_loss = 0
-		#
-		for n, w in encoder.named_parameters():
-			if w.grad is None:
-				print(i)
-				print("Detected None Gradient")
-				print(n)
-				continue
-			else:
-				pass
-			if torch.sum(w.grad) == 0:
-				print("0 gradient detected")
-				print(i)
-				print(n)
-
-		for n, w in decoder.named_parameters():
-			if w.grad is None:
-				print("Detected None Gradient")
-				print(n)
-				print(i)
-				continue
-			else:
-				pass
-			if torch.sum(w.grad) == 0:
-				print("0 gradient detected")
-				print(n)
-				print(i)
 
 		torch.cuda.empty_cache()
 
@@ -206,7 +171,7 @@ encoder.init_weights()
 # The hidden size is notably doubled here due to the encoder being bi-directional. The decoder also doesn't take
 # BIO tags as input. Instead it takes   the previously predicted word, or in the case of teacher forcing, the ground
 # truth.
-decoder = AttnGruDecoder(input_size=CONFIG.INPUT_SIZE, hidden_size=1200, teacher_ratio=.9, embedder=embedder,
+decoder = AttnGruDecoder(input_size=CONFIG.INPUT_SIZE, hidden_size=1200, teacher_ratio=1, embedder=embedder,
                          vocab_size=CONFIG.MAX_VOCAB_SIZE)
 decoder.init_weights()
 
@@ -215,16 +180,17 @@ if not os.path.exists("pre_trained"): os.mkdir("pre_trained")
 if not os.path.exists("pre_trained/weight_saves"): os.mkdir("pre_trained/weight_saves")
 
 # This line loads weights if they are already present
-if os.path.exists("pre_trained/weight_saves/encoder_3000"):
-	print("loaded weights")
-	encoder.load_state_dict(torch.load("pre_trained/weight_saves/encoder_3000"))
-if os.path.exists("pre_trained/weight_saves/decoder_3000"):
-	print("loaded weights")
-	decoder.load_state_dict(torch.load("pre_trained/weight_saves/decoder_3000"))
+iteration = 10000
+# # if os.path.exists("pre_trained/weight_saves/encoder_1000"):
+# print("loaded weights")
+# encoder.load_state_dict(torch.load(f"pre_trained/weight_saves/encoder_{iteration}"))
+# # if os.path.exists("pre_trained/weight_saves/decoder_1000"):
+# print("loaded weights")
+# decoder.load_state_dict(torch.load(f"pre_trained/weight_saves/decoder_{iteration}"))
 
 # These optimizers take care of adjusting learning rate according to gradient size
-encoder_optim = torch.optim.Adam(encoder.parameters())
-decoder_optim = torch.optim.Adam(decoder.parameters())
+encoder_optim = torch.optim.Adam(filter(lambda x: x.requires_grad, encoder.parameters()))
+decoder_optim = torch.optim.Adam(filter(lambda x: x.requires_grad, decoder.parameters()))
 
 # Words are treated as classes and the output of the model is a probability distribution of these classes for
 # each word in the output.
@@ -233,10 +199,9 @@ criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=CONFIG.PADD_TOK
 # This creates a dataset compatible with pytorch that auto-shuffles and we don't have to worry about
 # indexing errors
 # check_and_gen_squad()
+# data_loader = DataLoader(dataset, shuffle=True, batch_size=1, collate_fn=data_load_fn)
+# test(encoder, decoder, data_loader)
 
-
-data_loader = DataLoader(dataset, shuffle=True, batch_size=1, collate_fn=data_load_fn)
-
-test(encoder, decoder, data_loader)
 data_loader = DataLoader(dataset, shuffle=True, batch_size=5, collate_fn=data_load_fn)
-train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, math.floor(len(data_loader) * 20 / 30), CONFIG.PADD_TOKEN_IDX)
+train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, math.floor(len(data_loader) * 20 / 30),
+      CONFIG.PADD_TOKEN_IDX)
