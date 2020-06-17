@@ -180,13 +180,13 @@ if not os.path.exists("pre_trained"): os.mkdir("pre_trained")
 if not os.path.exists("pre_trained/weight_saves"): os.mkdir("pre_trained/weight_saves")
 
 # This line loads weights if they are already present
-iteration = 10000
+iteration = 65000
 # # if os.path.exists("pre_trained/weight_saves/encoder_1000"):
-# print("loaded weights")
-# encoder.load_state_dict(torch.load(f"pre_trained/weight_saves/encoder_{iteration}"))
-# # if os.path.exists("pre_trained/weight_saves/decoder_1000"):
-# print("loaded weights")
-# decoder.load_state_dict(torch.load(f"pre_trained/weight_saves/decoder_{iteration}"))
+print("loaded weights")
+encoder.load_state_dict(torch.load(f"pre_trained/weight_saves/encoder_{iteration}"))
+# if os.path.exists("pre_trained/weight_saves/decoder_1000"):
+print("loaded weights")
+decoder.load_state_dict(torch.load(f"pre_trained/weight_saves/decoder_{iteration}"))
 
 # These optimizers take care of adjusting learning rate according to gradient size
 encoder_optim = torch.optim.Adam(filter(lambda x: x.requires_grad, encoder.parameters()))
@@ -199,8 +199,8 @@ criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=CONFIG.PADD_TOK
 # This creates a dataset compatible with pytorch that auto-shuffles and we don't have to worry about
 # indexing errors
 # check_and_gen_squad()
-# data_loader = DataLoader(dataset, shuffle=True, batch_size=1, collate_fn=data_load_fn)
-# test(encoder, decoder, data_loader)
+data_loader = DataLoader(dataset, shuffle=True, batch_size=1, collate_fn=data_load_fn)
+test(encoder, decoder, data_loader)
 
 data_loader = DataLoader(dataset, shuffle=True, batch_size=5, collate_fn=data_load_fn)
 train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, math.floor(len(data_loader) * 20 / 30),
