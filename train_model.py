@@ -2,20 +2,16 @@ import json
 import math
 import os
 import pickle
-
-import bcolz
-
-import CONFIG
 from datetime import datetime
 
+import bcolz
 import torch
 import torch.nn as nn
-
 from torch.utils.data import DataLoader
 
+import CONFIG
 from data_loaders import QADataset, data_load_fn
 from models import BiAttnGRUEncoder, AttnGruDecoder, GloVeEmbedder
-from pre_processing_BERT import check_and_gen_squad
 
 BATCH_SIZE = 1
 INPUT_SIZE = 768
@@ -67,7 +63,7 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 		encoder.to("cuda")
 
 		x, attn = encoder(context_vec, answer_tags)
-		x = decoder(output_vec, x, attn)
+		x = decoder(context_vec, output_vec, x, attn)
 
 		# Saves the model every 1000 iterations
 		# prints the current sample and prediction for it
@@ -102,6 +98,9 @@ def train(encoder, decoder, encoder_optim, deocder_optim, criterion, data, epoch
 
 		# This adds the numerical loss (adding loss objects fills up GPU memory very quickly)
 		cum_loss += loss.item() / BATCH_SIZE
+
+		if i % 1000 == 0:
+			print(f"avg loss from previous iterations: {cum_loss / 1000}")
 
 		del loss
 
@@ -142,9 +141,20 @@ def test(encoder, decoder, input_data):
 		decoder.train(False)
 
 		x, attn = encoder(context_vec, answer_tags)
-		x = decoder(output_vec, x, attn)
+		x = decoder(context_vec, output_vec, x, attn)
+		for output in x:
+			seq = []
+			for idx in output:
+				seq.append(vocab[str(idx)])
+			print(seq)
+		truth = []
+		for word_idx in output_vec[0].long():
+			word = str(word_idx.item())
+			truth.append(vocab[word])
+		print(truth)
 
 
+torch.autograd.set_detect_anomaly(True)
 # print(f"PRED: {CONFIG.BERT_ENCODER.decode(torch.argmax(torch.softmax(x[0], 1), dim=1))}")
 
 
@@ -180,21 +190,22 @@ if not os.path.exists("pre_trained"): os.mkdir("pre_trained")
 if not os.path.exists("pre_trained/weight_saves"): os.mkdir("pre_trained/weight_saves")
 
 # This line loads weights if they are already present
-iteration = 65000
+iteration = 48000
 # # if os.path.exists("pre_trained/weight_saves/encoder_1000"):
 print("loaded weights")
-encoder.load_state_dict(torch.load(f"pre_trained/weight_saves/encoder_{iteration}"))
+encoder.load_state_dict(torch.load(f"pre_trained/weight_saves/encoder_fixed_attn{iteration}"))
 # if os.path.exists("pre_trained/weight_saves/decoder_1000"):
 print("loaded weights")
-decoder.load_state_dict(torch.load(f"pre_trained/weight_saves/decoder_{iteration}"))
+decoder.load_state_dict(torch.load(f"pre_trained/weight_saves/decoder_fixed_attn{iteration}"))
 
 # These optimizers take care of adjusting learning rate according to gradient size
 encoder_optim = torch.optim.Adam(filter(lambda x: x.requires_grad, encoder.parameters()))
 decoder_optim = torch.optim.Adam(filter(lambda x: x.requires_grad, decoder.parameters()))
 
+
 # Words are treated as classes and the output of the model is a probability distribution of these classes for
 # each word in the output.
-criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=CONFIG.PADD_TOKEN_IDX)
+criterion = nn.NLLLoss(size_average=False, ignore_index=CONFIG.PADD_TOKEN_IDX)
 
 # This creates a dataset compatible with pytorch that auto-shuffles and we don't have to worry about
 # indexing errors
@@ -202,6 +213,6 @@ criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=CONFIG.PADD_TOK
 data_loader = DataLoader(dataset, shuffle=True, batch_size=1, collate_fn=data_load_fn)
 test(encoder, decoder, data_loader)
 
-data_loader = DataLoader(dataset, shuffle=True, batch_size=5, collate_fn=data_load_fn)
-train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, math.floor(len(data_loader) * 20 / 30),
-      CONFIG.PADD_TOKEN_IDX)
+# data_loader = DataLoader(dataset, shuffle=True, batch_size=2, collate_fn=data_load_fn)
+# train(encoder, decoder, encoder_optim, decoder_optim, criterion, data_loader, math.floor(len(data_loader) * 20 / 30),
+#       CONFIG.PADD_TOKEN_IDX)

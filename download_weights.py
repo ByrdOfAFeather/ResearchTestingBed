@@ -1,11 +1,11 @@
 import subprocess
 import argparse
 
-iteration = 3000
+iteration = 48000
 
 subprocess.run(['scp',
-                f"byrdof@longleaf.unc.edu:/pine/scr/b/y/byrdof/ResearchTestingBed/pre_trained/weight_saves/encoder_{iteration}",
+                f"byrdof@longleaf.unc.edu:/pine/scr/b/y/byrdof/ResearchTestingBed/pre_trained/weight_saves/encoder_fixed_attn{iteration}",
                 "pre_trained/weight_saves/."])
 subprocess.run(['scp',
-                f"byrdof@longleaf.unc.edu:/pine/scr/b/y/byrdof/ResearchTestingBed/pre_trained/weight_saves/decoder_{iteration}",
+                f"byrdof@longleaf.unc.edu:/pine/scr/b/y/byrdof/ResearchTestingBed/pre_trained/weight_saves/decoder_fixed_attn{iteration}",
                 "pre_trained/weight_saves/."])

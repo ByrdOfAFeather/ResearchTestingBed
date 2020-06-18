@@ -1,3 +1,4 @@
+import copy
 import json
 import pickle
 
@@ -14,7 +15,6 @@ MAX_OUTPUT = 20
 INPUT_SIZE = 768
 with open(f"{CONFIG.DATA_PATH}/vocab.json") as f:
 	vocab = json.load(f)
-
 
 if torch.cuda.is_available():
 	torch.set_default_tensor_type('torch.cuda.FloatTensor')
@@ -89,7 +89,7 @@ class BiAttnGRUEncoder(nn.Module):
 		attn = torch.zeros([batch_size, no_states, self.hidden_size * 2])
 		for state_idx in range(0, no_states):
 			current_state = all_hidden_states[:, state_idx: state_idx + 1, :]
-			attn[:, :, :] = self._attention_layer(current_state, all_hidden_states)
+			attn[:, state_idx: state_idx + 1, :] = self._attention_layer(current_state, all_hidden_states)
 		return attn
 
 	def forward(self, context, answer_tags):
@@ -140,6 +140,18 @@ class BiAttnGRUEncoder(nn.Module):
 
 		# and return the last hidden state as well as the attention
 		return concatenation, attn
+
+
+class DecoderBeam:
+	def __init__(self, prob, current_state, current_word, prev_output):
+		self.prob = prob
+		self.current_state = current_state
+		self.current_words = current_word
+		self.prev_output = prev_output
+		self.children = []
+
+	def add_child(self, node):
+		self.children.append(node)
 
 
 class AttnGruDecoder(nn.Module):
@@ -197,41 +209,159 @@ class AttnGruDecoder(nn.Module):
 		print(generated_sequence)
 		return generated_sequence
 
-	def forward(self, x, hidden_state, encoder_attention):
+	def self_attention(self, hidden_state, encoder_attention):
+		attn_layer = self.decoder_att_linear(hidden_state)
+		raw_scores = torch.matmul(attn_layer, torch.transpose(encoder_attention, 1, 2))
+		attn_layer = self.softmax(raw_scores)
+		attn_layer = torch.matmul(attn_layer, encoder_attention)
+		attn_layer = torch.cat((attn_layer, hidden_state), dim=2)
+		hidden_state = self.tanh(self.decoder_attn_weighted_ctx(attn_layer)).squeeze()
+		return torch.transpose(raw_scores, 1, 2), hidden_state
+
+	def maxout_pointer(self, prediction_dist, original_sequence, raw_scores):
+		batch_size = original_sequence.shape[0]
+		no_input_words = original_sequence.shape[1]
+		pred_idx = torch.argmax(prediction_dist, dim=1, keepdim=True)
+		sequence_copy = torch.zeros([batch_size, no_input_words, 1])
+		for i in range(0, batch_size):
+			sequence_copy[i][original_sequence[i, :, :] == pred_idx[i]] = -1
+		attn_indicies = (sequence_copy == -1).nonzero()
+		copy_scores = torch.zeros([batch_size, no_input_words, 1])
+		if attn_indicies.shape[0] != 0:
+			attn_scores = torch.zeros([batch_size, attn_indicies.shape[0], 1])
+			attn_scores[attn_scores == 0] = -10000  # Basically padding
+			for idx, attn_indx in enumerate(attn_indicies):
+				attn_scores[attn_indx[0], idx, :] = raw_scores[tuple(attn_indx)]
+			max_scores = torch.max(attn_scores, keepdim=True, dim=1)[0]
+			for attn_indx in attn_indicies:
+				copy_scores[attn_indx[0], attn_indx[1], :] = max_scores[attn_indx[0]]
+			copy_scores = copy_scores.squeeze()
+			concated = torch.cat([prediction_dist, copy_scores], dim=1)
+			dist = nn.functional.log_softmax(concated, dim=1).clone()
+			copy_dist = dist[:, CONFIG.MAX_VOCAB_SIZE:]
+			output_dist = dist[:, 0: CONFIG.MAX_VOCAB_SIZE]
+			for attn_indx in attn_indicies:
+				output_dist[attn_indx[0], attn_indx[1]] += copy_dist[attn_indx[0], attn_indx[1]]
+		else:
+			concated = torch.cat([prediction_dist, copy_scores.squeeze()], dim=1)
+			dist = nn.functional.log_softmax(concated, dim=1)
+			output_dist = dist[:, 0: CONFIG.MAX_VOCAB_SIZE]
+		return output_dist
+
+	def beam_decoder(self, hidden_state, encoder_attention):
+		preds = torch.zeros([MAX_OUTPUT, 1]).long()
+		k = 5
+		generated_sequences = []
+		no_outputted = 0
+		current_words = self.GLoVE_embedder(torch.tensor([[CONFIG.START_TOKEN_IDX]])).squeeze(1)
+		root_node = []
+		i = 0
+		can_break_tracker = [False for i in range(k)]
+		while True:
+			if not root_node:
+				hidden_state = self.gru_module(current_words, hidden_state)
+
+				attn_layer = self.decoder_att_linear(hidden_state)
+				attn_layer = torch.nn.functional.softmax(torch.matmul(attn_layer, torch.t(encoder_attention[0])), dim=1)
+				attn_layer = torch.matmul(attn_layer, encoder_attention[0])
+				attn_layer = torch.cat((attn_layer, hidden_state), dim=1)
+				hidden_state = self.tanh(self.decoder_attn_weighted_ctx(attn_layer))
+				prob_dist = torch.nn.functional.softmax(self.prediction_layer(hidden_state), dim=1)
+				index = torch.argmax(prob_dist)
+				token_prob = prob_dist[:, index]
+				root_node.extend(
+					[DecoderBeam(token_prob, hidden_state, index, [torch.argmax(prob_dist).item()]) for _ in range(k)])
+			else:
+				top_probs_from_beams = []
+				top_index_from_beams = []
+				index_to_beam = {}
+				for beam_idx, beam in enumerate(root_node):
+					hidden_state = beam.current_state
+					current_words = self.GLoVE_embedder(beam.current_words).unsqueeze(0)
+					hidden_state = self.gru_module(current_words, hidden_state)
+
+					attn_layer = self.decoder_att_linear(hidden_state)
+					attn_layer = torch.nn.functional.softmax(torch.matmul(attn_layer, torch.t(encoder_attention[0])),
+					                                         dim=1)
+					attn_layer = torch.matmul(attn_layer, encoder_attention[0])
+					attn_layer = torch.cat((attn_layer, hidden_state), dim=1)
+					hidden_state = self.tanh(self.decoder_attn_weighted_ctx(attn_layer))
+					prob_dist = torch.nn.functional.softmax(self.prediction_layer(hidden_state), dim=1)
+					combined_prob_dist = beam.prob * prob_dist
+					top_k_prob, top_k_index = torch.sort(combined_prob_dist, descending=True)
+					top_k_prob = top_k_prob[0, 0:k].tolist()
+					top_k_index = [(i, beam_idx, hidden_state) for i in top_k_index[0, 0:k].tolist()]
+					top_index_from_beams.extend(top_k_index)
+					top_probs_from_beams.extend(top_k_prob)
+					# top_from_beams.extend(top_k)
+					index_to_beam[len(top_probs_from_beams)] = beam_idx
+				paried = list(zip(top_probs_from_beams, top_index_from_beams))
+				paried.sort(key=lambda x: x[0], reverse=True)
+				if i == 1:
+					paried = [paried[i * k + 1] for i in range(0, k)]  # Make sure that a different start word is used
+				paried = paried[0: k]
+				sequences = [bruh.prev_output.copy() for bruh in root_node]
+				for idx, beams in enumerate(paried):
+					new_seq = sequences[beams[1][1]].copy()
+					new_seq.append(beams[1][0])
+					root_node[idx] = DecoderBeam(current_state=beams[1][2], current_word=torch.tensor(beams[1][0]),
+					                             prev_output=new_seq,
+					                             prob=beams[0])
+
+				for idx in range(k):
+					if root_node[idx].prev_output[-1] == CONFIG.END_TOKEN_IDX:
+						can_break_tracker[idx] = True
+					elif len(root_node[idx].prev_output) > 3000:
+						can_break_tracker[idx] = True
+						print("GOT WAY TO BIG SEQUENCE")
+				can_break = True
+				for breakable in can_break_tracker:
+					if not breakable:
+						can_break = False
+				if can_break:
+					root_node.sort(key=lambda x: x.prob, reverse=True)
+					return [node.prev_output for node in root_node]
+			i += 1
+
+	def forward(self, original_sequence, target_sequence, hidden_state, encoder_attention):
 		"""
-		:param x: The ground truth that the model is trying to predict
+		:param target_sequence: The ground truth that the model is trying to predict
 		:param hidden_state: The last hidden state of the encoder
 		:param encoder_attention: The attention as calculated by the encoder
 		:return:
 		"""
 		if self.training:
-			batch_size = x.shape[0]
-			no_words = x.shape[1]
+			batch_size = target_sequence.shape[0]
+			no_words = target_sequence.shape[1]
+			no_input_words = original_sequence.shape[1]
 			teacher_forcing_decisions = choice([0, 1], no_words,
 			                                   p=[1 - self.teacher_forcing_ratio, self.teacher_forcing_ratio])
+			inital_preds = torch.zeros([batch_size, no_words, self.vocab_size])
 			preds = torch.zeros([batch_size, no_words, self.vocab_size])
-			x = x.long()
+			target_sequence = target_sequence.long()
 			for word_idx in range(0, no_words):
 				if teacher_forcing_decisions[word_idx] == 1 and word_idx != 0:
-					current_words = self.GLoVE_embedder(x[:, word_idx - 1, :]).squeeze(1)
+					current_words = self.GLoVE_embedder(target_sequence[:, word_idx - 1, :]).squeeze(1)
 				elif word_idx == 0:
-					current_words = self.GLoVE_embedder(torch.tensor([[CONFIG.START_TOKEN_IDX] for _ in range(0, batch_size)])).squeeze(1)
+					current_words = self.GLoVE_embedder(
+						torch.tensor([[CONFIG.START_TOKEN_IDX] for _ in range(0, batch_size)])).squeeze(1)
 				else:
 					current_words = self.GLoVE_embedder(torch.tensor(
-						torch.argmax(preds[:, word_idx - 1, :], dim=1).long(), device='cuda'))
+						torch.argmax(inital_preds[:, word_idx - 1, :], dim=1).long(), device='cuda'))
 
 				hidden_state = self.gru_module(current_words, hidden_state)
 				hidden_state = hidden_state.unsqueeze(1)
-				attn_layer = self.decoder_att_linear(hidden_state)
-				attn_layer = self.softmax(torch.matmul(attn_layer, torch.transpose(encoder_attention, 1, 2)))
-				attn_layer = torch.matmul(attn_layer, encoder_attention)
-				attn_layer = torch.cat((attn_layer, hidden_state), dim=2)
-				hidden_state = self.tanh(self.decoder_attn_weighted_ctx(attn_layer)).squeeze()
+				raw_scores, hidden_state = self.self_attention(hidden_state, encoder_attention)
 				preds[:, word_idx, :] = self.prediction_layer(hidden_state)
+
+			# Copy Mechanism
+			# final_dist = self.maxout_pointer(inital_preds[:, word_idx, :], original_sequence, raw_scores)
+
+			# preds[:, word_idx, :] = final_dist
 
 			return preds
 		else:
-			return self.greedy_search(hidden_state, encoder_attention)
+			return self.beam_decoder(hidden_state, encoder_attention)
 
 
 class Seq2SeqModel(nn.Module):
@@ -269,3 +399,6 @@ class ParagraphLevelGeneration(Seq2SeqModel):
 			x, attn = self.encoder(x)
 			x = self.decoder(None, x, attn)
 			return x
+
+#####
+# Generate the word and if the word matches the index on
